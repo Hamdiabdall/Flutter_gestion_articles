@@ -1,0 +1,50 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper functions to match Firestore security model
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Article images - linked to articles in Firestore
+    match /article_images/{articleId} {
+      // Anyone can view article images (public read)
+      allow read: if true;
+      
+      // Only authenticated users can upload images
+      // Make sure upload content is an image and size is reasonable (10MB max)
+      allow create, update: if isAuthenticated() &&
+                             request.resource.size <= 10 * 1024 * 1024 &&
+                             request.resource.contentType.matches('image/.*');
+      
+      // Only the article owner can delete the article image
+      // Uses a Firestore lookup to verify ownership
+      allow delete: if isAuthenticated() &&
+                    exists(/databases/(default)/documents/articles/$(articleId)) &&
+                    get(/databases/(default)/documents/articles/$(articleId)).data.authorId == request.auth.uid;
+    }
+    
+    // Profile images - if you add this feature later
+    match /profile_images/{userId} {
+      // Anyone can view profile images
+      allow read: if true;
+      
+      // Only the user can upload/update their own profile image
+      allow create, update: if isOwner(userId) &&
+                             request.resource.size <= 5 * 1024 * 1024 &&
+                             request.resource.contentType.matches('image/.*');
+      
+      // Only the user can delete their own profile image
+      allow delete: if isOwner(userId);
+    }
+    
+    // Deny access to all other storage paths by default
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

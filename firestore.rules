@@ -1,0 +1,130 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user is the owner of a resource
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Helper function to validate article data
+    function isValidArticle() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['authorId', 'authorName', 'title', 'content', 'createdAt']) &&
+             data.authorId is string &&
+             data.authorName is string &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 100 &&
+             data.content is string && data.content.size() <= 20000 &&
+             data.createdAt is timestamp;
+    }
+    
+    // Helper function to validate comment data
+    function isValidComment() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['articleId', 'authorId', 'authorName', 'content', 'createdAt']) &&
+             data.articleId is string &&
+             data.authorId is string &&
+             data.authorName is string &&
+             data.content is string && data.content.size() > 0 && data.content.size() <= 1000 &&
+             data.createdAt is timestamp;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // Anyone can read user profiles
+      allow read: if true;
+      
+      // Only authenticated users can create their own profile
+      allow create: if isOwner(userId) &&
+                      request.resource.data.keys().hasAll(['name', 'email']) &&
+                      request.resource.data.name is string &&
+                      request.resource.data.email is string;
+      
+      // Only the owner can update their profile
+      allow update: if isOwner(userId) &&
+                      request.resource.data.keys().hasAll(['name', 'email']) &&
+                      request.resource.data.name is string &&
+                      request.resource.data.email is string;
+      
+      // Only the owner can delete their profile
+      allow delete: if isOwner(userId);
+    }
+    
+    // Articles collection
+    match /articles/{articleId} {
+      // Anyone can read articles
+      allow read: if true;
+      
+      // Only authenticated users can create articles
+      allow create: if isAuthenticated() && 
+                      request.resource.data.authorId == request.auth.uid &&
+                      isValidArticle();
+      
+      // The author can update all fields of their articles
+      // OR any authenticated user can update likeCount and commentCount fields
+      allow update: if isAuthenticated() && (
+                      // Author can do full updates
+                      (resource.data.authorId == request.auth.uid &&
+                       isValidArticle() &&
+                       request.resource.data.authorId == resource.data.authorId) ||
+                      
+                      // Any authenticated user can update likes
+                      (request.resource.data.diff(resource.data).affectedKeys()
+                       .hasOnly(['likeCount', 'commentCount']) &&
+                       request.resource.data.authorId == resource.data.authorId &&
+                       request.resource.data.title == resource.data.title &&
+                       request.resource.data.content == resource.data.content &&
+                       request.resource.data.authorName == resource.data.authorName &&
+                       request.resource.data.createdAt == resource.data.createdAt)
+                     );
+      
+      // Only the author can delete their articles
+      allow delete: if isAuthenticated() && 
+                      resource.data.authorId == request.auth.uid;
+    }
+    
+    // Comments collection
+    match /comments/{commentId} {
+      // Anyone can read comments
+      allow read: if true;
+      
+      // Only authenticated users can create comments
+      allow create: if isAuthenticated() && 
+                      request.resource.data.authorId == request.auth.uid &&
+                      isValidComment();
+      
+      // Only the author can update their comments
+      allow update: if isAuthenticated() && 
+                      resource.data.authorId == request.auth.uid &&
+                      isValidComment() &&
+                      request.resource.data.authorId == resource.data.authorId &&
+                      request.resource.data.articleId == resource.data.articleId;
+      
+      // Only the author can delete their comments
+      allow delete: if isAuthenticated() && 
+                      resource.data.authorId == request.auth.uid;
+    }
+    
+    // Article Likes collection (to track which users liked which articles)
+    match /articleLikes/{likeId} {
+      // Anyone can read likes
+      allow read: if true;
+      
+      // Only authenticated users can create likes, and only for themselves
+      allow create: if isAuthenticated() && 
+                      request.resource.data.userId == request.auth.uid &&
+                      request.resource.data.keys().hasAll(['userId', 'articleId', 'timestamp']);
+      
+      // No updates allowed - likes are create-once
+      allow update: if false;
+      
+      // Only the user who created the like can delete it (unlike feature)
+      allow delete: if isAuthenticated() && 
+                      resource.data.userId == request.auth.uid;
+    }
+  }
+}

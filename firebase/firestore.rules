@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Basic rule - authenticated users can read and create most content
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user is the owner of a resource
+    function isOwner(resource) {
+      return isAuthenticated() && request.auth.uid == resource.data.authorId;
+    }
+    
+    // Allow anyone to read articles
+    match /articles/{articleId} {
+      allow read: if true;
+      // Allow authenticated users to create articles
+      allow create: if isAuthenticated();
+      // Allow only the article author to update or delete
+      allow update, delete: if isAuthenticated() && request.auth.uid == resource.data.authorId;
+    }
+    
+    // Allow authenticated users to like articles once
+    match /articleLikes/{likeId} {
+      allow read: if true;
+      // Only allow creating if the user is authenticated and the likeId starts with their userId
+      allow create: if isAuthenticated() && 
+                     likeId.matches(request.auth.uid + '-.*') && 
+                     request.resource.data.userId == request.auth.uid;
+      // No updates or deletes allowed for likes
+      allow update, delete: if false;
+    }
+    
+    // Allow authenticated users to create comments
+    match /comments/{commentId} {
+      allow read: if true;
+      allow create: if isAuthenticated();
+      // Allow only the comment author to update or delete
+      allow update, delete: if isOwner(resource);
+    }
+    
+    // Allow discussions and replies management
+    match /discussions/{discussionId} {
+      // Everyone can read discussions
+      allow read: if true;
+      // Authenticated users can create discussions with proper fields
+      allow create: if isAuthenticated() && 
+                     request.resource.data.authorId == request.auth.uid && 
+                     request.resource.data.keys().hasAll(['title', 'content', 'authorId', 'authorName', 'createdAt']);
+      // Only authors can update or delete their own discussions
+      allow update, delete: if isAuthenticated() && request.auth.uid == resource.data.authorId;
+      
+      // Allow replies to discussions
+      match /replies/{replyId} {
+        // Everyone can read replies
+        allow read: if true;
+        // Authenticated users can create replies with proper fields
+        allow create: if isAuthenticated() && 
+                     request.resource.data.authorId == request.auth.uid && 
+                     request.resource.data.keys().hasAll(['content', 'authorId', 'authorName', 'createdAt']);
+        // Only authors can update or delete their own replies
+        allow update, delete: if isAuthenticated() && request.auth.uid == resource.data.authorId;
+      }
+    }
+    
+    // Allow users to manage their own data
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId;
+    }
+  }
+}
